@@ -1,9 +1,9 @@
 import {useState, useCallback} from 'react';
-import {useQuery, useMutation, DocumentNode} from '@apollo/client';
+import {useQuery, useMutation, useSubscription, DocumentNode} from '@apollo/client';
 import {toast} from 'react-hot-toast';
 import type {MessageEdge} from '../../__generated__/resolvers-types';
 import {MessageSender, MessageStatus} from '../../__generated__/resolvers-types';
-import {SEND_MESSAGE_MUTATION} from '../graphql/documents';
+import {SEND_MESSAGE_MUTATION, MESSAGE_UPDATED_SUBSCRIPTION} from '../graphql/documents';
 
 const DEFAULT_PAGE_SIZE = 10;
 const PAGINATION_THRESHOLD = 5;
@@ -37,11 +37,81 @@ export const useChatHook = (query: DocumentNode) => {
 
             cache.modify({
                 fields: {
-                    messages(existingMessages = {edges: []}) {
+                    messages(existingMessages = {edges: []}, {readField}) {
+                        const existingEdge = existingMessages.edges.find(
+                            (edge: MessageEdge) => readField('id', edge.node) === newMessage.id,
+                        );
+
+                        if (existingEdge) {
+                            const existingUpdatedAt = new Date(
+                                readField('updatedAt', existingEdge.node) as string,
+                            ).getTime();
+                            const newUpdatedAt = new Date(newMessage.updatedAt).getTime();
+
+                            if (newUpdatedAt < existingUpdatedAt) {
+                                return existingMessages;
+                            }
+                        }
+
+                        const newEdges = existingMessages.edges.filter(
+                            (edge: MessageEdge) =>
+                                readField('status', edge.node) !== MessageStatus.Sending,
+                        );
+
                         const newMessageEdge = {
                             __typename: 'MessageEdge',
                             cursor: newMessage.id,
                             node: newMessage,
+                        };
+
+                        return {
+                            ...existingMessages,
+                            edges: [...newEdges, newMessageEdge],
+                        };
+                    },
+                },
+            });
+        },
+    });
+
+    useSubscription(MESSAGE_UPDATED_SUBSCRIPTION, {
+        onData: ({client, data}) => {
+            const message = data.data?.messageUpdated;
+            if (!message) {
+                return;
+            }
+
+            const {cache} = client;
+
+            cache.modify({
+                fields: {
+                    messages(existingMessages = {edges: []}, {readField}) {
+                        const messageExists = existingMessages.edges.some(
+                            (edge: MessageEdge) => readField('id', edge.node) === message.id,
+                        );
+
+                        if (messageExists) {
+                            return {
+                                ...existingMessages,
+                                edges: existingMessages.edges.map((edge: MessageEdge) => {
+                                    if (readField('id', edge.node) === message.id) {
+                                        return {
+                                            ...edge,
+                                            node: message,
+                                        };
+                                    }
+                                    return edge;
+                                }),
+                            };
+                        }
+
+                        const newMessageEdge = {
+                            __typename: 'MessageEdge',
+                            cursor: message.id,
+                            node: {
+                                __typename: 'Message',
+                                ...message,
+                            },
                         };
 
                         return {

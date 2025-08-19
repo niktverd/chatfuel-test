@@ -34,3 +34,15 @@ export const SEND_MESSAGE_MUTATION = gql`
         }
     }
 `;
+
+export const MESSAGE_UPDATED_SUBSCRIPTION = gql`
+    subscription OnMessageUpdated {
+        messageUpdated {
+            id
+            text
+            status
+            updatedAt
+            sender
+        }
+    }
+`;
