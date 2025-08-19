@@ -11,37 +11,40 @@
 }
 
 .container {
+    overflow: hidden; /* Ensure proper containment for virtualized list */
     flex: auto;
+}
+
+.list {
+    overflow: auto;
+
+    height: 100%;
+    scrollbar-color: #c1c1c1 #f1f1f1;
+    scrollbar-width: thin;
+}
+
+.list::-webkit-scrollbar {
+    width: 6px;
+}
+
+.list::-webkit-scrollbar-track {
+    border-radius: 3px;
+    background: #f1f1f1;
+}
+
+.list::-webkit-scrollbar-thumb {
+    border-radius: 3px;
+    background: #c1c1c1;
+}
+
+.list::-webkit-scrollbar-thumb:hover {
+    background: #a8a8a8;
 }
 
 .item {
     display: flex;
 
     padding: 6px 16px;
-}
-
-.message {
-    display: flex;
-    flex-direction: column;
-    gap: 0.75rem;
-
-    width: fit-content;
-    max-width: 26.25rem;
-    padding: 0.75rem;
-
-    white-space: pre-wrap;
-}
-
-.message.in {
-    border-radius: 12px 12px 12px 4px;
-    background-color: #f2f3f4;
-}
-
-.message.out {
-    margin-left: auto;
-
-    border-radius: 12px 12px 4px;
-    background-color: #e0f0ff;
 }
 
 .footer {

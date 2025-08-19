@@ -1,0 +1,16 @@
+.root {
+    display: flex;
+    flex-direction: column;
+
+    width: 400px;
+    height: 400px;
+    margin: auto;
+
+    border: 1px solid #e4e5ea;
+    border-radius: 16px;
+}
+
+.container {
+    overflow: hidden; /* Ensure proper containment for virtualized list */
+    flex: auto;
+}
