@@ -1,6 +1,8 @@
 {
   "name": "chatfuel",
-  "author": { "name": "Enenlingre" },
+  "author": {
+    "name": "niktverd"
+  },
   "private": true,
   "version": "0.0.0",
   "type": "module",
@@ -8,7 +10,15 @@
     "start:server": "vite-node ./server/index.ts",
     "start:client": "vite",
     "build": "tsc -b && vite build",
-    "lint": "eslint .",
+    "lint": "run-s lint:js lint:styles lint:prettier typecheck",
+    "lint:fix": "run-s lint:js:fix lint:styles:fix lint:prettier:fix typecheck",
+    "lint:js": "eslint '**/*.{js,jsx,ts,tsx}' --max-warnings=0",
+    "lint:js:fix": "npm run lint:js -- --quiet --fix",
+    "lint:styles": "stylelint **/*.css",
+    "lint:styles:fix": "stylelint **/*.css --fix",
+    "lint:prettier": "prettier --check '**/*.{js,jsx,ts,tsx,css,json,yaml,yml,md}'",
+    "lint:prettier:fix": "prettier --write '**/*.{js,jsx,ts,tsx,css,json,yaml,yml,md}'",
+    "typecheck": "tsc -p . --noEmit",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -30,14 +40,18 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.17.0",
+    "@gravity-ui/prettier-config": "^1.1.0",
+    "@gravity-ui/stylelint-config": "^5.0.0",
     "@types/node": "^22.10.2",
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.3.5",
     "@vitejs/plugin-react": "^4.3.4",
-    "eslint": "^9.17.0",
+    "eslint": "^9.33.0",
     "eslint-plugin-react-hooks": "^5.0.0",
     "eslint-plugin-react-refresh": "^0.4.16",
     "globals": "^15.14.0",
+    "npm-run-all": "^4.1.5",
+    "prettier": "^3.6.2",
     "typescript": "~5.6.2",
     "typescript-eslint": "^8.18.2",
     "vite": "^6.0.5"
