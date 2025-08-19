@@ -4,11 +4,13 @@ import './index.css';
 import {Chat} from './chat.tsx';
 import {ApolloProvider} from '@apollo/client';
 import {client} from './graphql/client.ts';
+import {Toaster} from 'react-hot-toast';
 
 createRoot(document.getElementById('root')!).render(
     <StrictMode>
         <ApolloProvider client={client}>
             <Chat />
+            <Toaster />
         </ApolloProvider>
     </StrictMode>,
 );

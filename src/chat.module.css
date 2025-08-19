@@ -41,12 +41,6 @@
     background: #a8a8a8;
 }
 
-.item {
-    display: flex;
-
-    padding: 6px 16px;
-}
-
 .footer {
     display: flex;
     gap: 16px;

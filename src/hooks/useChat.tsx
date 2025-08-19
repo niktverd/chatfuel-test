@@ -1,12 +1,16 @@
 import {useState, useCallback} from 'react';
-import {useQuery, DocumentNode} from '@apollo/client';
+import {useQuery, useMutation, DocumentNode} from '@apollo/client';
+import {toast} from 'react-hot-toast';
 import type {MessageEdge} from '../../__generated__/resolvers-types';
+import {MessageSender, MessageStatus} from '../../__generated__/resolvers-types';
+import {SEND_MESSAGE_MUTATION} from '../graphql/documents';
 
 const DEFAULT_PAGE_SIZE = 10;
 const PAGINATION_THRESHOLD = 5;
 
 export const useChatHook = (query: DocumentNode) => {
     const [isFetchingMore, setIsFetchingMore] = useState(false);
+    const [inputText, setInputText] = useState('');
 
     const {data, loading, error, fetchMore, refetch} = useQuery(query, {
         variables: {
@@ -14,6 +18,40 @@ export const useChatHook = (query: DocumentNode) => {
             after: null,
         },
         notifyOnNetworkStatusChange: true,
+    });
+
+    const [sendMessage, {loading: sendingMessage}] = useMutation(SEND_MESSAGE_MUTATION, {
+        onError: (error) => {
+            toast.error(`Failed to send message: ${error.message}`);
+            console.error('Failed to send message:', error);
+        },
+        onCompleted: (data) => {
+            console.log('Message sent successfully:', data);
+            setInputText('');
+        },
+        update: (cache, {data}) => {
+            const newMessage = data?.sendMessage;
+            if (!newMessage) {
+                return;
+            }
+
+            cache.modify({
+                fields: {
+                    messages(existingMessages = {edges: []}) {
+                        const newMessageEdge = {
+                            __typename: 'MessageEdge',
+                            cursor: newMessage.id,
+                            node: newMessage,
+                        };
+
+                        return {
+                            ...existingMessages,
+                            edges: [...existingMessages.edges, newMessageEdge],
+                        };
+                    },
+                },
+            });
+        },
     });
 
     const messages = data?.messages?.edges?.map((edge: MessageEdge) => edge.node) || [];
@@ -66,15 +104,40 @@ export const useChatHook = (query: DocumentNode) => {
         [messages.length, pageInfo?.hasNextPage, isFetchingMore, loadMoreMessages],
     );
 
+    const handleSendMessage = useCallback(async () => {
+        if (inputText.trim().length === 0) {
+            return;
+        }
+
+        try {
+            await sendMessage({
+                variables: {text: inputText.trim()},
+                optimisticResponse: {
+                    sendMessage: {
+                        __typename: 'Message',
+                        id: `optimistic-${Date.now()}`,
+                        text: inputText.trim(),
+                        status: MessageStatus.Sending,
+                        updatedAt: new Date().toISOString(),
+                        sender: MessageSender.Admin,
+                    },
+                },
+            });
+        } catch (error) {
+            console.error('Error in handleSendMessage:', error);
+        }
+    }, [inputText, sendMessage]);
+
     return {
         messages,
         loading,
         error,
-        hasNextPage: pageInfo?.hasNextPage || false,
-        hasPreviousPage: pageInfo?.hasPreviousPage || false,
-        cursor: pageInfo?.endCursor || null,
         isFetchingMore,
         handleEndReached,
         handleRetry: refetch,
+        inputText,
+        setInputText,
+        handleSendMessage,
+        sendingMessage,
     };
 };
