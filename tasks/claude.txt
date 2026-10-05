@@ -1,0 +1,914 @@
+
+# Apollo Client Code Review & Improvements
+
+## Issues Identified
+
+### 1. **Cache Management Problems**
+
+**Current Issues:**
+- Manual cache modifications in `useChat.tsx` are overly complex and error-prone
+- The subscription update logic has unnecessary complexity with timestamp comparisons
+- Cache updates don't properly handle edge cases (duplicates, race conditions)
+
+**Better Approach:**
+```typescript
+// Use cache policies and proper cache updates
+const [sendMessage] = useMutation(SEND_MESSAGE_MUTATION, {
+  update(cache, { data }) {
+    if (!data?.sendMessage) return;
+    
+    cache.updateQuery({ query: MESSAGES_QUERY }, (prev) => {
+      if (!prev?.messages) return prev;
+      
+      return {
+        messages: {
+          ...prev.messages,
+          edges: [
+            ...prev.messages.edges,
+            {
+              __typename: 'MessageEdge',
+              cursor: data.sendMessage.id,
+              node: data.sendMessage,
+            }
+          ]
+        }
+      };
+    });
+  }
+});
+```
+
+### 2. **Missing Type Safety**
+
+**Current Issues:**
+- GraphQL operations lack proper TypeScript integration
+- Manual type assertions instead of generated types
+
+**Better Approach:**
+```typescript
+// Use GraphQL Code Generator with proper typing
+import { useMessagesQuery, useSendMessageMutation } from '../generated/graphql';
+
+const { data, loading, error, fetchMore } = useMessagesQuery({
+  variables: { first: DEFAULT_PAGE_SIZE },
+  notifyOnNetworkStatusChange: true,
+});
+```
+
+### 3. **Inefficient Subscription Handling**
+
+**Current Issues:**
+- Subscription logic duplicates cache update patterns from mutations
+- Complex filtering logic that could be handled by Apollo's built-in features
+
+**Better Approach:**
+```typescript
+// Use subscriptionData properly with cache policies
+useSubscription(MESSAGE_UPDATED_SUBSCRIPTION, {
+  onData({ data, client }) {
+    // Let Apollo handle the cache updates automatically
+    // Or use simpler cache modifications
+    client.cache.evict({ fieldName: 'messages' });
+    client.cache.gc();
+  }
+});
+```
+
+### 4. **Poor Error Handling**
+
+**Current Issues:**
+- Basic error handling with toast notifications
+- No error boundaries or retry strategies
+- Missing network error handling
+
+**Better Approach:**
+```typescript
+const { data, loading, error, refetch } = useQuery(MESSAGES_QUERY, {
+  errorPolicy: 'partial',
+  notifyOnNetworkStatusChange: true,
+  onError: (error) => {
+    if (error.networkError) {
+      // Handle network errors differently
+    }
+    if (error.graphQLErrors?.length) {
+      // Handle GraphQL errors
+    }
+  }
+});
+```
+
+### 5. **Missing Apollo Client Features**
+
+**What's Missing:**
+- No cache policies configuration
+- No optimistic UI patterns (except basic optimistic response)
+- No proper loading states management
+- No cache normalization considerations
+- No batch operations
+- No cache persistence
+
+## Recommended Improvements
+
+### 1. **Implement Proper Cache Policies**
+
+```typescript
+// In Apollo Client setup
+const client = new ApolloClient({
+  uri: 'your-graphql-endpoint',
+  cache: new InMemoryCache({
+    typePolicies: {
+      Query: {
+        fields: {
+          messages: relayStylePagination(), // Use built-in pagination
+        },
+      },
+      Message: {
+        fields: {
+          status: {
+            merge: (existing, incoming) => incoming,
+          }
+        }
+      }
+    }
+  })
+});
+```
+
+### 2. **Use GraphQL Fragments**
+
+```typescript
+const MESSAGE_FRAGMENT = gql`
+  fragment MessageFields on Message {
+    id
+    text
+    status
+    updatedAt
+    sender
+  }
+`;
+
+const MESSAGES_QUERY = gql`
+  query GetMessages($first: Int, $after: MessagesCursor) {
+    messages(first: $first, after: $after) {
+      edges {
+        node {
+          ...MessageFields
+        }
+        cursor
+      }
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+    }
+  }
+  ${MESSAGE_FRAGMENT}
+`;
+```
+
+### 3. **Implement Better Optimistic Updates**
+
+```typescript
+const [sendMessage] = useMutation(SEND_MESSAGE_MUTATION, {
+  optimisticResponse: ({ text }) => ({
+    sendMessage: {
+      __typename: 'Message',
+      id: `temp-${Date.now()}`,
+      text,
+      status: MessageStatus.Sending,
+      updatedAt: new Date().toISOString(),
+      sender: MessageSender.Admin,
+    }
+  }),
+  update(cache, { data }) {
+    // Cleaner cache update logic
+  },
+  onError: (error, { variables }) => {
+    // Rollback optimistic update on error
+    toast.error(`Failed to send: ${variables.text}`);
+  }
+});
+```
+
+### 4. **Use Apollo Client Hooks Properly**
+
+```typescript
+// Better pagination with fetchMore
+const { data, loading, error, fetchMore, networkStatus } = useQuery(MESSAGES_QUERY, {
+  variables: { first: PAGE_SIZE },
+  notifyOnNetworkStatusChange: true,
+});
+
+const loadMore = useCallback(() => {
+  return fetchMore({
+    variables: {
+      after: data?.messages?.pageInfo?.endCursor,
+    }
+  });
+}, [fetchMore, data?.messages?.pageInfo?.endCursor]);
+```
+
+### 5. **Add Proper Loading States**
+
+```typescript
+// Use networkStatus for better loading states
+import { NetworkStatus } from '@apollo/client';
+
+const isInitialLoading = networkStatus === NetworkStatus.loading;
+const isLoadingMore = networkStatus === NetworkStatus.fetchMore;
+const isRefetching = networkStatus === NetworkStatus.refetch;
+```
+
+## Summary
+
+The main issues demonstrate insufficient knowledge of:
+
+1. **Cache Management**: Overly complex manual cache updates instead of using Apollo's built-in features
+2. **Type Safety**: Missing proper TypeScript integration with GraphQL
+3. **Error Handling**: Basic error handling without leveraging Apollo's error policies
+4. **Performance**: Not using fragments, proper cache policies, or batch operations
+5. **Best Practices**: Missing modern Apollo Client patterns and hooks usage
+
+To improve, focus on:
+- Learning Apollo Client's cache normalization and policies
+- Implementing proper TypeScript integration with GraphQL Code Generator
+- Using Apollo's built-in pagination and error handling features
+- Understanding optimistic updates and cache management patterns
+- Implementing proper loading states and error boundaries
+
+# Step-by-Step Apollo Client Improvement Guide
+
+## Phase 1: Setup & Type Safety (Foundation)
+
+### Step 1: Install and Configure GraphQL Code Generator
+
+```bash
+npm install -D @graphql-codegen/cli @graphql-codegen/typescript @graphql-codegen/typescript-operations @graphql-codegen/typescript-react-apollo
+```
+
+Create `codegen.ts`:
+```typescript
+import type { CodegenConfig } from '@graphql-codegen/cli';
+
+const config: CodegenConfig = {
+  schema: 'http://localhost:4000/graphql', // Your GraphQL endpoint
+  documents: ['src/**/*.{ts,tsx}'],
+  generates: {
+    './src/__generated__/': {
+      preset: 'client',
+      plugins: []
+    },
+    './src/__generated__/graphql.tsx': {
+      plugins: [
+        'typescript',
+        'typescript-operations',
+        'typescript-react-apollo'
+      ]
+    }
+  }
+};
+
+export default config;
+```
+
+Add scripts to `package.json`:
+```json
+{
+  "scripts": {
+    "codegen": "graphql-codegen",
+    "codegen:watch": "graphql-codegen --watch"
+  }
+}
+```
+
+### Step 2: Create GraphQL Fragments
+
+Create `src/graphql/fragments.ts`:
+```typescript
+import { gql } from '@apollo/client';
+
+export const MESSAGE_FRAGMENT = gql`
+  fragment MessageFields on Message {
+    id
+    text
+    status
+    updatedAt
+    sender
+  }
+`;
+
+export const MESSAGE_EDGE_FRAGMENT = gql`
+  fragment MessageEdgeFields on MessageEdge {
+    cursor
+    node {
+      ...MessageFields
+    }
+  }
+  ${MESSAGE_FRAGMENT}
+`;
+
+export const PAGE_INFO_FRAGMENT = gql`
+  fragment PageInfoFields on PageInfo {
+    hasNextPage
+    hasPreviousPage
+    startCursor
+    endCursor
+  }
+`;
+```
+
+### Step 3: Update GraphQL Documents with Fragments
+
+Update `src/graphql/documents.ts`:
+```typescript
+import { gql } from '@apollo/client';
+import { MESSAGE_FRAGMENT, MESSAGE_EDGE_FRAGMENT, PAGE_INFO_FRAGMENT } from './fragments';
+
+export const MESSAGES_QUERY = gql`
+  query GetMessages($first: Int, $after: MessagesCursor) {
+    messages(first: $first, after: $after) {
+      edges {
+        ...MessageEdgeFields
+      }
+      pageInfo {
+        ...PageInfoFields
+      }
+    }
+  }
+  ${MESSAGE_EDGE_FRAGMENT}
+  ${PAGE_INFO_FRAGMENT}
+`;
+
+export const SEND_MESSAGE_MUTATION = gql`
+  mutation SendMessage($text: String!) {
+    sendMessage(text: $text) {
+      ...MessageFields
+    }
+  }
+  ${MESSAGE_FRAGMENT}
+`;
+
+export const MESSAGE_UPDATED_SUBSCRIPTION = gql`
+  subscription OnMessageUpdated {
+    messageUpdated {
+      ...MessageFields
+    }
+  }
+  ${MESSAGE_FRAGMENT}
+`;
+```
+
+## Phase 2: Improve Apollo Client Configuration
+
+### Step 4: Enhanced Apollo Client Setup
+
+Create `src/graphql/client.ts`:
+```typescript
+import { ApolloClient, InMemoryCache, createHttpLink, from } from '@apollo/client';
+import { setContext } from '@apollo/client/link/context';
+import { onError } from '@apollo/client/link/error';
+import { GraphQLWsLink } from '@apollo/client/link/subscriptions';
+import { createClient } from 'graphql-ws';
+import { getMainDefinition } from '@apollo/client/utilities';
+import { split } from '@apollo/client/link/core';
+import { relayStylePagination } from '@apollo/client/utilities';
+
+// HTTP Link
+const httpLink = createHttpLink({
+  uri: 'http://localhost:4000/graphql',
+});
+
+// WebSocket Link for subscriptions
+const wsLink = new GraphQLWsLink(
+  createClient({
+    url: 'ws://localhost:4000/graphql',
+  })
+);
+
+// Split link - use ws for subscriptions, http for queries/mutations
+const splitLink = split(
+  ({ query }) => {
+    const definition = getMainDefinition(query);
+    return (
+      definition.kind === 'OperationDefinition' &&
+      definition.operation === 'subscription'
+    );
+  },
+  wsLink,
+  httpLink
+);
+
+// Auth link (if needed)
+const authLink = setContext((_, { headers }) => {
+  const token = localStorage.getItem('token'); // Adjust as needed
+  return {
+    headers: {
+      ...headers,
+      authorization: token ? `Bearer ${token}` : '',
+    }
+  };
+});
+
+// Error handling link
+const errorLink = onError(({ graphQLErrors, networkError, operation, forward }) => {
+  if (graphQLErrors) {
+    graphQLErrors.forEach(({ message, locations, path }) =>
+      console.error(
+        `GraphQL error: Message: ${message}, Location: ${locations}, Path: ${path}`
+      )
+    );
+  }
+
+  if (networkError) {
+    console.error(`Network error: ${networkError}`);
+    // Handle network errors (retry, redirect to login, etc.)
+  }
+});
+
+// Enhanced cache with proper type policies
+const cache = new InMemoryCache({
+  typePolicies: {
+    Query: {
+      fields: {
+        messages: relayStylePagination(['first', 'after']),
+      },
+    },
+    Message: {
+      fields: {
+        status: {
+          merge: (existing, incoming) => incoming,
+        },
+      },
+    },
+  },
+});
+
+export const client = new ApolloClient({
+  link: from([errorLink, authLink, splitLink]),
+  cache,
+  defaultOptions: {
+    watchQuery: {
+      errorPolicy: 'partial',
+      notifyOnNetworkStatusChange: true,
+    },
+    query: {
+      errorPolicy: 'partial',
+    },
+  },
+});
+```
+
+## Phase 3: Refactor Hook with Generated Types
+
+### Step 5: Generate Types and Update Hook
+
+Run codegen:
+```bash
+npm run codegen
+```
+
+Create improved `src/hooks/useChat.tsx`:
+```typescript
+import { useState, useCallback } from 'react';
+import { NetworkStatus } from '@apollo/client';
+import { toast } from 'react-hot-toast';
+import {
+  useGetMessagesQuery,
+  useSendMessageMutation,
+  useOnMessageUpdatedSubscription,
+  MessageStatus,
+  MessageSender,
+  GetMessagesDocument,
+} from '../__generated__/graphql';
+
+const DEFAULT_PAGE_SIZE = 10;
+const PAGINATION_THRESHOLD = 5;
+
+export const useChatHook = () => {
+  const [inputText, setInputText] = useState('');
+
+  // Query with proper typing
+  const {
+    data,
+    loading,
+    error,
+    fetchMore,
+    refetch,
+    networkStatus,
+  } = useGetMessagesQuery({
+    variables: {
+      first: DEFAULT_PAGE_SIZE,
+      after: null,
+    },
+    notifyOnNetworkStatusChange: true,
+    errorPolicy: 'partial',
+  });
+
+  // Mutation with better cache handling
+  const [sendMessageMutation, { loading: sendingMessage }] = useSendMessageMutation({
+    onError: (error) => {
+      toast.error(`Failed to send message: ${error.message}`);
+    },
+    onCompleted: () => {
+      setInputText('');
+      toast.success('Message sent successfully!');
+    },
+    update(cache, { data }) {
+      if (!data?.sendMessage) return;
+
+      // Use updateQuery for cleaner cache updates
+      cache.updateQuery(
+        {
+          query: GetMessagesDocument,
+          variables: { first: DEFAULT_PAGE_SIZE, after: null },
+        },
+        (prev) => {
+          if (!prev?.messages) return prev;
+
+          return {
+            messages: {
+              ...prev.messages,
+              edges: [
+                ...prev.messages.edges,
+                {
+                  __typename: 'MessageEdge' as const,
+                  cursor: data.sendMessage.id,
+                  node: data.sendMessage,
+                },
+              ],
+            },
+          };
+        }
+      );
+    },
+    optimisticResponse: (vars) => ({
+      sendMessage: {
+        __typename: 'Message' as const,
+        id: `optimistic-${Date.now()}`,
+        text: vars.text,
+        status: MessageStatus.Sending,
+        updatedAt: new Date().toISOString(),
+        sender: MessageSender.Admin,
+      },
+    }),
+  });
+
+  // Subscription with proper handling
+  useOnMessageUpdatedSubscription({
+    onData({ data: subscriptionData, client }) {
+      const message = subscriptionData.data?.messageUpdated;
+      if (!message) return;
+
+      // Simple cache update - let Apollo handle the complexity
+      client.cache.updateQuery(
+        {
+          query: GetMessagesDocument,
+          variables: { first: DEFAULT_PAGE_SIZE, after: null },
+        },
+        (prev) => {
+          if (!prev?.messages) return prev;
+
+          const existingIndex = prev.messages.edges.findIndex(
+            edge => edge.node.id === message.id
+          );
+
+          if (existingIndex >= 0) {
+            // Update existing message
+            const newEdges = [...prev.messages.edges];
+            newEdges[existingIndex] = {
+              ...newEdges[existingIndex],
+              node: message,
+            };
+
+            return {
+              messages: {
+                ...prev.messages,
+                edges: newEdges,
+              },
+            };
+          } else {
+            // Add new message
+            return {
+              messages: {
+                ...prev.messages,
+                edges: [
+                  ...prev.messages.edges,
+                  {
+                    __typename: 'MessageEdge' as const,
+                    cursor: message.id,
+                    node: message,
+                  },
+                ],
+              },
+            };
+          }
+        }
+      );
+    },
+  });
+
+  // Derived state with proper typing
+  const messages = data?.messages?.edges?.map(edge => edge.node) || [];
+  const pageInfo = data?.messages?.pageInfo;
+  
+  // Better loading states
+  const isInitialLoading = networkStatus === NetworkStatus.loading;
+  const isLoadingMore = networkStatus === NetworkStatus.fetchMore;
+  const isRefetching = networkStatus === NetworkStatus.refetch;
+
+  // Improved pagination
+  const loadMoreMessages = useCallback(async () => {
+    if (!pageInfo?.hasNextPage || isLoadingMore) return;
+
+    try {
+      await fetchMore({
+        variables: {
+          after: pageInfo.endCursor,
+        },
+      });
+    } catch (error) {
+      console.error('Failed to load more messages:', error);
+      toast.error('Failed to load more messages');
+    }
+  }, [fetchMore, pageInfo?.hasNextPage, pageInfo?.endCursor, isLoadingMore]);
+
+  const handleEndReached = useCallback(
+    (index: number) => {
+      if (
+        index >= messages.length - PAGINATION_THRESHOLD &&
+        pageInfo?.hasNextPage &&
+        !isLoadingMore
+      ) {
+        loadMoreMessages();
+      }
+    },
+    [messages.length, pageInfo?.hasNextPage, isLoadingMore, loadMoreMessages]
+  );
+
+  const handleSendMessage = useCallback(async () => {
+    const trimmedText = inputText.trim();
+    if (!trimmedText) return;
+
+    try {
+      await sendMessageMutation({
+        variables: { text: trimmedText },
+      });
+    } catch (error) {
+      // Error is handled in onError callback
+      console.error('Send message error:', error);
+    }
+  }, [inputText, sendMessageMutation]);
+
+  const handleRetry = useCallback(() => {
+    refetch();
+  }, [refetch]);
+
+  return {
+    // Data
+    messages,
+    
+    // Loading states
+    loading: isInitialLoading,
+    isLoadingMore,
+    isRefetching,
+    sendingMessage,
+    
+    // Error state
+    error,
+    
+    // Actions
+    handleEndReached,
+    handleRetry,
+    handleSendMessage,
+    
+    // Input state
+    inputText,
+    setInputText,
+  };
+};
+```
+
+## Phase 4: Error Boundaries and Better Error Handling
+
+### Step 6: Create Error Boundary
+
+Create `src/components/ErrorBoundary/index.tsx`:
+```typescript
+import React, { Component, ReactNode } from 'react';
+import { ApolloError } from '@apollo/client';
+
+interface Props {
+  children: ReactNode;
+  fallback?: (error: Error, retry: () => void) => ReactNode;
+}
+
+interface State {
+  hasError: boolean;
+  error: Error | null;
+}
+
+export class ErrorBoundary extends Component<Props, State> {
+  constructor(props: Props) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error: Error): State {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: Error, errorInfo: any) {
+    console.error('Error caught by boundary:', error, errorInfo);
+    
+    // Send to error reporting service
+    if (error instanceof ApolloError) {
+      console.error('Apollo Error:', {
+        graphQLErrors: error.graphQLErrors,
+        networkError: error.networkError,
+      });
+    }
+  }
+
+  handleRetry = () => {
+    this.setState({ hasError: false, error: null });
+  };
+
+  render() {
+    if (this.state.hasError) {
+      if (this.props.fallback) {
+        return this.props.fallback(this.state.error!, this.handleRetry);
+      }
+
+      return (
+        <div style={{ padding: '20px', textAlign: 'center' }}>
+          <h2>Something went wrong</h2>
+          <p>{this.state.error?.message}</p>
+          <button onClick={this.handleRetry}>Try Again</button>
+        </div>
+      );
+    }
+
+    return this.props.children;
+  }
+}
+```
+
+### Step 7: Update Main App with Error Boundary
+
+Update `src/main.tsx`:
+```typescript
+import { StrictMode } from 'react';
+import { createRoot } from 'react-dom/client';
+import './index.css';
+import { Chat } from './chat.tsx';
+import { ApolloProvider } from '@apollo/client';
+import { client } from './graphql/client.ts';
+import { Toaster } from 'react-hot-toast';
+import { ErrorBoundary } from './components/ErrorBoundary';
+
+createRoot(document.getElementById('root')!).render(
+  <StrictMode>
+    <ErrorBoundary>
+      <ApolloProvider client={client}>
+        <Chat />
+        <Toaster position="top-right" />
+      </ApolloProvider>
+    </ErrorBoundary>
+  </StrictMode>
+);
+```
+
+## Phase 5: Advanced Features
+
+### Step 8: Add Cache Persistence (Optional)
+
+```bash
+npm install apollo3-cache-persist
+```
+
+Update `src/graphql/client.ts`:
+```typescript
+import { persistCache } from 'apollo3-cache-persist';
+
+// Add before creating client
+await persistCache({
+  cache,
+  storage: window.localStorage,
+});
+```
+
+### Step 9: Add Batch Operations
+
+```typescript
+// In your hook, add batch sending capability
+const handleSendBatch = useCallback(async (messages: string[]) => {
+  const mutations = messages.map(text => 
+    sendMessageMutation({ variables: { text } })
+  );
+  
+  try {
+    await Promise.all(mutations);
+    toast.success(`${messages.length} messages sent!`);
+  } catch (error) {
+    toast.error('Some messages failed to send');
+  }
+}, [sendMessageMutation]);
+```
+
+## Phase 6: Testing
+
+### Step 10: Add Tests with MockedProvider
+
+```bash
+npm install -D @apollo/client/testing
+```
+
+Create `src/hooks/__tests__/useChat.test.tsx`:
+```typescript
+import { renderHook, waitFor } from '@testing-library/react';
+import { MockedProvider } from '@apollo/client/testing';
+import { useChatHook } from '../useChat';
+import { GetMessagesDocument } from '../../__generated__/graphql';
+
+const mocks = [
+  {
+    request: {
+      query: GetMessagesDocument,
+      variables: { first: 10, after: null },
+    },
+    result: {
+      data: {
+        messages: {
+          edges: [],
+          pageInfo: {
+            hasNextPage: false,
+            endCursor: null,
+          },
+        },
+      },
+    },
+  },
+];
+
+test('should load messages', async () => {
+  const { result } = renderHook(() => useChatHook(), {
+    wrapper: ({ children }) => (
+      <MockedProvider mocks={mocks}>
+        {children}
+      </MockedProvider>
+    ),
+  });
+
+  await waitFor(() => {
+    expect(result.current.loading).toBe(false);
+  });
+
+  expect(result.current.messages).toEqual([]);
+});
+```
+
+## Summary
+
+This step-by-step guide transforms your basic Apollo Client implementation into a professional, production-ready solution that demonstrates:
+
+1. **Type Safety**: Full TypeScript integration with generated types
+2. **Advanced Caching**: Proper cache policies and normalization
+3. **Error Handling**: Comprehensive error boundaries and retry logic  
+4. **Performance**: Fragments, batch operations, and optimized queries
+5. **Testing**: Proper test setup with MockedProvider
+6. **Best Practices**: Clean architecture and separation of concerns
+
+Follow these steps in order, testing each phase before moving to the next. This will showcase the Apollo Client expertise expected for senior positions.
+
+
+This comprehensive guide will transform your Apollo Client implementation from basic to advanced level. Here's how to approach it:
+Start with Phase 1 (Foundation) - Most Critical
+
+Step 1-3 are the highest priority - they'll give you proper type safety and show you understand GraphQL best practices with fragments
+This alone will significantly improve how your code is perceived
+
+Then Phase 2 (Configuration) - High Impact
+
+Step 4 demonstrates deep Apollo Client knowledge with proper cache policies, error handling, and link composition
+This is where many developers show their inexperience
+
+Phase 3 (Implementation) - Core Improvement
+
+Step 5 replaces your current hook with a much cleaner, professional implementation
+Shows proper use of generated types and Apollo's built-in features
+
+Phases 4-6 are Advanced Touches
+
+Add these if you want to really stand out
+Error boundaries, testing, and advanced features show production-ready thinking
+
+Quick Wins to Start Today:
+
+Install GraphQL Code Generator (30 minutes)
+Create fragments (20 minutes)
+Update your cache configuration (45 minutes)
+Simplify your hook logic (1 hour)
+
+These four changes alone will make your code look dramatically more professional and show proper Apollo Client expertise.
+The key insight from the feedback is that your current code works but looks like someone who learned Apollo basics without exploring its powerful features. This guide addresses exactly that gap.
+Would you like me to help you implement any specific phase first?

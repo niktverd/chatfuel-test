@@ -26,6 +26,7 @@
     "@apollo/server": "^4.11.2",
     "@graphql-tools/schema": "^10.0.14",
     "@types/cors": "^2.8.17",
+    "apollo3-cache-persist": "^0.15.0",
     "clsx": "^2.1.1",
     "cors": "^2.8.5",
     "express": "^4.21.2",

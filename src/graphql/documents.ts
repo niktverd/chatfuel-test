@@ -1,48 +1,35 @@
 import {gql} from '@apollo/client';
+import { MESSAGE_FIELDS_FRAGMENT, MESSAGE_EDGE_FIELDS_FRAGMENT, PAGE_INFO_FIELDS_FRAGMENT } from './fragments';
 
 export const MESSAGES_QUERY = gql`
     query GetMessages($first: Int, $after: MessagesCursor) {
         messages(first: $first, after: $after) {
             edges {
-                node {
-                    id
-                    text
-                    status
-                    updatedAt
-                    sender
-                }
-                cursor
+                ...MessageEdgeFields
             }
             pageInfo {
-                hasNextPage
-                hasPreviousPage
-                startCursor
-                endCursor
+                ...PageInfoFields
             }
         }
     }
+    ${MESSAGE_EDGE_FIELDS_FRAGMENT}
+    ${PAGE_INFO_FIELDS_FRAGMENT}
 `;
 
 export const SEND_MESSAGE_MUTATION = gql`
     mutation SendMessage($text: String!) {
         sendMessage(text: $text) {
-            id
-            text
-            status
-            updatedAt
-            sender
+            ...MessageFields
         }
     }
+    ${MESSAGE_FIELDS_FRAGMENT}
 `;
 
 export const MESSAGE_UPDATED_SUBSCRIPTION = gql`
     subscription OnMessageUpdated {
         messageUpdated {
-            id
-            text
-            status
-            updatedAt
-            sender
+            ...MessageFields
         }
     }
+    ${MESSAGE_FIELDS_FRAGMENT}
 `;
